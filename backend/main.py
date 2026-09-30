@@ -1,35 +1,51 @@
-from fastapi import (
-    FastAPI,
-    HTTPException,
-    Depends,
-)
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import (
-    HTTPBearer,
-    HTTPAuthorizationCredentials,
-)
-
-from pydantic import BaseModel, EmailStr
-
-from pwdlib import PasswordHash
-
-import jwt
-
-from datetime import datetime, timedelta, timezone
-
-import json
 import os
-
+import json
+from pathlib import Path
+from datetime import datetime
 from typing import Optional
+
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from pwdlib import PasswordHash
+from dotenv import load_dotenv
+from google import genai
 
 
 # ============================================================
-# APPLICATION
+# LOAD ENVIRONMENT VARIABLES
+# ============================================================
+
+load_dotenv()
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+
+# ============================================================
+# GEMINI CLIENT
+# ============================================================
+
+if GEMINI_API_KEY:
+    gemini_client = genai.Client(
+        api_key=GEMINI_API_KEY
+    )
+else:
+    gemini_client = None
+    print(
+        "WARNING: GEMINI_API_KEY was not found in .env"
+    )
+
+
+# ============================================================
+# FASTAPI APPLICATION
 # ============================================================
 
 app = FastAPI(
-    title="ITFR Todo API",
-    description="Todo and authentication API using JSON storage",
+    title="AI Web Application API",
+    description=(
+        "FastAPI backend with authentication, "
+        "Todo CRUD, Gemini AI and Health Assistant"
+    ),
     version="1.0.0",
 )
 
@@ -51,825 +67,747 @@ app.add_middleware(
 
 
 # ============================================================
-# FILE PATHS
+# FILE LOCATIONS
 # ============================================================
 
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
-)
+BASE_DIR = Path(__file__).resolve().parent
 
-USERS_FILE = os.path.join(
-    BASE_DIR,
-    "users.json"
-)
-
-TODO_FILE = os.path.join(
-    BASE_DIR,
-    "todo.json"
-)
+USERS_FILE = BASE_DIR / "users.json"
+TODOS_FILE = BASE_DIR / "todo.json"
 
 
 # ============================================================
-# JWT CONFIGURATION
-# ============================================================
-
-SECRET_KEY = "CHANGE_THIS_SECRET_KEY_BEFORE_DEPLOYMENT"
-
-ALGORITHM = "HS256"
-
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
-
-# ============================================================
-# SECURITY
+# PASSWORD HASHING
 # ============================================================
 
 password_hash = PasswordHash.recommended()
 
-security = HTTPBearer()
-
 
 # ============================================================
-# INITIALIZE JSON FILES
+# REQUEST MODELS
 # ============================================================
-
-def initialize_files():
-
-    if not os.path.exists(USERS_FILE):
-
-        with open(
-            USERS_FILE,
-            "w",
-            encoding="utf-8"
-        ) as file:
-
-            json.dump(
-                [],
-                file,
-                indent=4
-            )
-
-
-    if not os.path.exists(TODO_FILE):
-
-        with open(
-            TODO_FILE,
-            "w",
-            encoding="utf-8"
-        ) as file:
-
-            json.dump(
-                [],
-                file,
-                indent=4
-            )
-
-
-initialize_files()
-
-
-# ============================================================
-# JSON HELPERS
-# ============================================================
-
-def load_json(file_path):
-
-    try:
-
-        with open(
-            file_path,
-            "r",
-            encoding="utf-8"
-        ) as file:
-
-            return json.load(file)
-
-    except FileNotFoundError:
-
-        return []
-
-    except json.JSONDecodeError:
-
-        return []
-
-
-def save_json(
-    file_path,
-    data
-):
-
-    with open(
-        file_path,
-        "w",
-        encoding="utf-8"
-    ) as file:
-
-        json.dump(
-            data,
-            file,
-            indent=4
-        )
-
-
-# ============================================================
-# USER HELPERS
-# ============================================================
-
-def load_users():
-
-    return load_json(
-        USERS_FILE
-    )
-
-
-def save_users(users):
-
-    save_json(
-        USERS_FILE,
-        users
-    )
-
-
-# ============================================================
-# TODO HELPERS
-# ============================================================
-
-def load_todos():
-
-    return load_json(
-        TODO_FILE
-    )
-
-
-def save_todos(todos):
-
-    save_json(
-        TODO_FILE,
-        todos
-    )
-
-
-# ============================================================
-# PASSWORD FUNCTIONS
-# ============================================================
-
-def hash_password(
-    password: str
-):
-
-    return password_hash.hash(
-        password
-    )
-
-
-def verify_password(
-    password: str,
-    hashed_password: str
-):
-
-    return password_hash.verify(
-        password,
-        hashed_password
-    )
-
-
-# ============================================================
-# JWT FUNCTIONS
-# ============================================================
-
-def create_access_token(
-    user_id: int
-):
-
-    expiration = (
-        datetime.now(timezone.utc)
-        + timedelta(
-            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-        )
-    )
-
-    payload = {
-        "sub": str(user_id),
-        "exp": expiration,
-    }
-
-    token = jwt.encode(
-        payload,
-        SECRET_KEY,
-        algorithm=ALGORITHM,
-    )
-
-    return token
-
-
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials
-    = Depends(security)
-):
-
-    token = credentials.credentials
-
-    try:
-
-        payload = jwt.decode(
-            token,
-            SECRET_KEY,
-            algorithms=[ALGORITHM],
-        )
-
-        user_id = payload.get("sub")
-
-        if user_id is None:
-
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid authentication token",
-            )
-
-        try:
-
-            user_id = int(user_id)
-
-        except ValueError:
-
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid authentication token",
-            )
-
-    except jwt.ExpiredSignatureError:
-
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication token has expired",
-        )
-
-    except jwt.InvalidTokenError:
-
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid authentication token",
-        )
-
-    users = load_users()
-
-    user = next(
-        (
-            user
-            for user in users
-            if user["id"] == user_id
-        ),
-        None,
-    )
-
-    if user is None:
-
-        raise HTTPException(
-            status_code=401,
-            detail="User no longer exists",
-        )
-
-    return user
-
-
-# ============================================================
-# PYDANTIC MODELS
-# ============================================================
-
-class UserCreate(BaseModel):
-
-    name: str
-
-    email: EmailStr
-
-
-class UserUpdate(BaseModel):
-
-    name: str
-
-    email: EmailStr
 
 
 class SignupRequest(BaseModel):
-
-    name: str
-
-    email: EmailStr
-
+    username: str
     password: str
+    name: Optional[str] = None
+    email: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
-
-    email: EmailStr
-
+    username: str
     password: str
 
 
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    password: Optional[str] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
 class TodoCreate(BaseModel):
-
     title: str
-
+    description: Optional[str] = ""
     completed: bool = False
 
 
 class TodoUpdate(BaseModel):
-
     title: Optional[str] = None
-
+    description: Optional[str] = None
     completed: Optional[bool] = None
+
+
+class AIRequest(BaseModel):
+    message: str
+
+
+class SymptomRequest(BaseModel):
+    age: Optional[int] = None
+    sex: Optional[str] = None
+    symptoms: str
+    duration: Optional[str] = None
+    severity: Optional[str] = None
+    medications: Optional[str] = None
+
+
+# ============================================================
+# JSON FILE INITIALIZATION
+# ============================================================
+
+
+def ensure_json_files():
+
+    if not USERS_FILE.exists():
+        USERS_FILE.write_text(
+            "[]",
+            encoding="utf-8",
+        )
+
+    if not TODOS_FILE.exists():
+        TODOS_FILE.write_text(
+            "[]",
+            encoding="utf-8",
+        )
+
+
+ensure_json_files()
+
+
+# ============================================================
+# USER JSON FUNCTIONS
+# ============================================================
+
+
+def load_users():
+
+    ensure_json_files()
+
+    try:
+
+        with open(
+            USERS_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+
+            data = json.load(file)
+
+            if isinstance(data, list):
+                return data
+
+            return []
+
+    except (
+        json.JSONDecodeError,
+        FileNotFoundError,
+    ):
+        return []
+
+
+def save_users(users):
+
+    with open(
+        USERS_FILE,
+        "w",
+        encoding="utf-8",
+    ) as file:
+
+        json.dump(
+            users,
+            file,
+            indent=4,
+            ensure_ascii=False,
+        )
+
+
+# ============================================================
+# TODO JSON FUNCTIONS
+# ============================================================
+
+
+def load_todos():
+
+    ensure_json_files()
+
+    try:
+
+        with open(
+            TODOS_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+
+            data = json.load(file)
+
+            if isinstance(data, list):
+                return data
+
+            return []
+
+    except (
+        json.JSONDecodeError,
+        FileNotFoundError,
+    ):
+        return []
+
+
+def save_todos(todos):
+
+    with open(
+        TODOS_FILE,
+        "w",
+        encoding="utf-8",
+    ) as file:
+
+        json.dump(
+            todos,
+            file,
+            indent=4,
+            ensure_ascii=False,
+        )
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+
+def get_next_user_id(users):
+
+    if not users:
+        return 1
+
+    return max(
+        int(user.get("id", 0))
+        for user in users
+    ) + 1
+
+
+def get_next_todo_id(todos):
+
+    if not todos:
+        return 1
+
+    return max(
+        int(todo.get("id", 0))
+        for todo in todos
+    ) + 1
+
+
+def public_user(user):
+
+    return {
+        "id": user.get("id"),
+        "username": user.get("username"),
+        "name": user.get("name"),
+        "email": user.get("email"),
+        "created_at": user.get(
+            "created_at"
+        ),
+    }
 
 
 # ============================================================
 # ROOT
 # ============================================================
 
+
 @app.get("/")
 def root():
 
     return {
-        "message": "ITFR Todo API is running",
-        "storage": "JSON",
-        "authentication": True,
+        "message":
+            "FastAPI backend is running.",
+        "features": [
+            "Authentication",
+            "Users",
+            "Todo CRUD",
+            "Gemini AI",
+            "AI Todo Analysis",
+            "Health Assistant",
+        ],
     }
 
 
 # ============================================================
-# AUTHENTICATION
+# HEALTH CHECK
 # ============================================================
 
-# ------------------------------------------------------------
+
+@app.get("/health")
+def health():
+
+    return {
+        "status": "ok",
+        "gemini_connected":
+            GEMINI_API_KEY is not None,
+    }
+
+
+# ============================================================
+# AUTH STATUS
+# ============================================================
+
+
+@app.get("/auth/status")
+def auth_status():
+
+    users = load_users()
+
+    return {
+        "has_users": len(users) > 0,
+        "user_count": len(users),
+    }
+
+
+# ============================================================
 # SIGNUP
-# ------------------------------------------------------------
+# ============================================================
+
 
 @app.post("/auth/signup")
 def signup(
-    user_data: SignupRequest
+    request: SignupRequest,
 ):
 
     users = load_users()
 
-    email = user_data.email.lower()
+    username = request.username.strip()
 
-    # --------------------------------------------------------
-    # Check duplicate email
-    # --------------------------------------------------------
-
-    existing_user = next(
-        (
-            user
-            for user in users
-            if user["email"].lower() == email
-        ),
-        None,
-    )
-
-    if existing_user:
+    if not username:
 
         raise HTTPException(
             status_code=400,
-            detail="Email is already registered",
+            detail="Username is required.",
         )
 
-    # --------------------------------------------------------
-    # Generate ID
-    # --------------------------------------------------------
+    if not request.password:
 
-    if users:
+        raise HTTPException(
+            status_code=400,
+            detail="Password is required.",
+        )
 
-        new_id = max(
-            user["id"]
-            for user in users
-        ) + 1
+    for user in users:
 
-    else:
+        if (
+            user.get(
+                "username",
+                "",
+            ).lower()
+            == username.lower()
+        ):
 
-        new_id = 1
-
-    # --------------------------------------------------------
-    # Create user
-    # --------------------------------------------------------
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Username already exists."
+                ),
+            )
 
     new_user = {
-        "id": new_id,
-        "name": user_data.name,
-        "email": email,
-        "password_hash": hash_password(
-            user_data.password
-        ),
+        "id":
+            get_next_user_id(users),
+
+        "username":
+            username,
+
+        "password_hash":
+            password_hash.hash(
+                request.password
+            ),
+
+        "name":
+            request.name or "",
+
+        "email":
+            request.email or "",
+
+        "created_at":
+            datetime.now().isoformat(),
     }
 
-    users.append(
-        new_user
-    )
+    users.append(new_user)
 
-    save_users(
-        users
-    )
-
-    # --------------------------------------------------------
-    # Never return password hash
-    # --------------------------------------------------------
+    save_users(users)
 
     return {
-        "message": "User created successfully",
-        "user": {
-            "id": new_user["id"],
-            "name": new_user["name"],
-            "email": new_user["email"],
-        },
+        "message":
+            "Account created successfully.",
+        "user":
+            public_user(new_user),
     }
 
 
-# ------------------------------------------------------------
+# ============================================================
 # LOGIN
-# ------------------------------------------------------------
+# ============================================================
+
 
 @app.post("/auth/login")
 def login(
-    login_data: LoginRequest
+    request: LoginRequest,
 ):
 
     users = load_users()
 
-    email = login_data.email.lower()
+    username = request.username.strip()
 
     user = next(
         (
             user
             for user in users
-            if user["email"].lower() == email
+            if (
+                user.get(
+                    "username",
+                    "",
+                ).lower()
+                == username.lower()
+            )
         ),
         None,
     )
 
-    if user is None:
+    if not user:
 
         raise HTTPException(
-            status_code=401,
-            detail="Invalid email or password",
+            status_code=
+                status.HTTP_401_UNAUTHORIZED,
+
+            detail=(
+                "Invalid username "
+                "or password."
+            ),
         )
 
-    if not verify_password(
-        login_data.password,
-        user["password_hash"]
-    ):
-
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid email or password",
-        )
-
-    token = create_access_token(
-        user["id"]
+    stored_hash = user.get(
+        "password_hash"
     )
 
+    if not stored_hash:
+
+        raise HTTPException(
+            status_code=
+                status.HTTP_401_UNAUTHORIZED,
+
+            detail=(
+                "Invalid username "
+                "or password."
+            ),
+        )
+
+    try:
+
+        valid_password = (
+            password_hash.verify(
+                request.password,
+                stored_hash,
+            )
+        )
+
+    except Exception:
+
+        valid_password = False
+
+    if not valid_password:
+
+        raise HTTPException(
+            status_code=
+                status.HTTP_401_UNAUTHORIZED,
+
+            detail=(
+                "Invalid username "
+                "or password."
+            ),
+        )
+
     return {
-        "message": "Login successful",
+        "message":
+            "Login successful.",
 
-        "access_token": token,
-
-        "token_type": "bearer",
-
-        "user": {
-            "id": user["id"],
-            "name": user["name"],
-            "email": user["email"],
-        },
+        "user":
+            public_user(user),
     }
 
 
-# ------------------------------------------------------------
-# CURRENT USER
-# ------------------------------------------------------------
-
-@app.get("/auth/me")
-def get_current_user_info(
-    current_user=Depends(
-        get_current_user
-    )
-):
-
-    return {
-        "id": current_user["id"],
-        "name": current_user["name"],
-        "email": current_user["email"],
-    }
-
-
 # ============================================================
-# USER CRUD
-# ============================================================
-#
-# These endpoints preserve the API your current Next.js
-# User Management page already uses.
-#
-# IMPORTANT:
-# These are administrative CRUD endpoints.
-# Authentication protection can be added later if desired.
-#
+# USERS - GET ALL
 # ============================================================
 
-
-# ------------------------------------------------------------
-# GET USERS
-# ------------------------------------------------------------
 
 @app.get("/users")
 def get_users():
 
     users = load_users()
 
-    # Never expose password hashes.
-
     return [
-        {
-            "id": user["id"],
-            "name": user["name"],
-            "email": user["email"],
-        }
+        public_user(user)
         for user in users
     ]
 
 
-# ------------------------------------------------------------
-# CREATE USER
-# ------------------------------------------------------------
+# ============================================================
+# USERS - GET ONE
+# ============================================================
 
-@app.post("/users")
-def create_user(
-    user_data: UserCreate
+
+@app.get("/users/{user_id}")
+def get_user(
+    user_id: int,
 ):
 
     users = load_users()
 
-    email = user_data.email.lower()
-
-    existing_user = next(
+    user = next(
         (
             user
             for user in users
-            if user["email"].lower() == email
+            if int(
+                user.get(
+                    "id",
+                    0,
+                )
+            ) == user_id
         ),
         None,
     )
 
-    if existing_user:
+    if not user:
+
+        raise HTTPException(
+            status_code=404,
+            detail="User not found.",
+        )
+
+    return public_user(user)
+
+
+# ============================================================
+# USERS - CREATE
+# ============================================================
+
+
+@app.post("/users")
+def create_user(
+    request: UserCreate,
+):
+
+    users = load_users()
+
+    username = request.username.strip()
+
+    if not username:
 
         raise HTTPException(
             status_code=400,
-            detail="Email is already registered",
+            detail="Username is required.",
         )
 
-    if users:
+    for user in users:
 
-        new_id = max(
-            user["id"]
-            for user in users
-        ) + 1
+        if (
+            user.get(
+                "username",
+                "",
+            ).lower()
+            == username.lower()
+        ):
 
-    else:
-
-        new_id = 1
-
-    # --------------------------------------------------------
-    # IMPORTANT
-    #
-    # Users created through /users do not have a password.
-    #
-    # For authentication accounts use:
-    #
-    # POST /auth/signup
-    #
-    # --------------------------------------------------------
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Username already exists."
+                ),
+            )
 
     new_user = {
-        "id": new_id,
-        "name": user_data.name,
-        "email": email,
-        "password_hash": None,
+        "id":
+            get_next_user_id(users),
+
+        "username":
+            username,
+
+        "password_hash":
+            password_hash.hash(
+                request.password
+            ),
+
+        "name":
+            request.name or "",
+
+        "email":
+            request.email or "",
+
+        "created_at":
+            datetime.now().isoformat(),
     }
 
-    users.append(
-        new_user
-    )
+    users.append(new_user)
 
-    save_users(
-        users
-    )
+    save_users(users)
 
     return {
-        "id": new_user["id"],
-        "name": new_user["name"],
-        "email": new_user["email"],
+        "message":
+            "User created successfully.",
+
+        "user":
+            public_user(new_user),
     }
 
 
-# ------------------------------------------------------------
-# UPDATE USER
-# ------------------------------------------------------------
+# ============================================================
+# USERS - UPDATE
+# ============================================================
+
 
 @app.put("/users/{user_id}")
 def update_user(
     user_id: int,
-    user_data: UserUpdate
+    request: UserUpdate,
 ):
 
     users = load_users()
 
-    user = next(
+    user_index = next(
         (
-            user
-            for user in users
-            if user["id"] == user_id
+            index
+            for index, user
+            in enumerate(users)
+            if int(
+                user.get(
+                    "id",
+                    0,
+                )
+            ) == user_id
         ),
         None,
     )
 
-    if user is None:
+    if user_index is None:
 
         raise HTTPException(
             status_code=404,
-            detail="User not found",
+            detail="User not found.",
         )
 
-    # Check duplicate email.
+    user = users[user_index]
 
-    email = user_data.email.lower()
+    if request.username is not None:
 
-    duplicate = next(
-        (
-            other
-            for other in users
-            if other["id"] != user_id
-            and other["email"].lower() == email
-        ),
-        None,
-    )
-
-    if duplicate:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Email is already registered",
+        username = (
+            request.username.strip()
         )
 
-    user["name"] = user_data.name
-    user["email"] = email
+        for existing in users:
 
-    save_users(
-        users
-    )
+            if (
+                int(
+                    existing.get(
+                        "id",
+                        0,
+                    )
+                )
+                != user_id
+                and existing.get(
+                    "username",
+                    "",
+                ).lower()
+                == username.lower()
+            ):
+
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Username "
+                        "already exists."
+                    ),
+                )
+
+        user["username"] = username
+
+    if request.name is not None:
+        user["name"] = request.name
+
+    if request.email is not None:
+        user["email"] = request.email
+
+    if request.password:
+
+        user["password_hash"] = (
+            password_hash.hash(
+                request.password
+            )
+        )
+
+    users[user_index] = user
+
+    save_users(users)
 
     return {
-        "id": user["id"],
-        "name": user["name"],
-        "email": user["email"],
+        "message":
+            "User updated successfully.",
+
+        "user":
+            public_user(user),
     }
 
 
-# ------------------------------------------------------------
-# DELETE USER
-# ------------------------------------------------------------
+# ============================================================
+# USERS - DELETE
+# ============================================================
+
 
 @app.delete("/users/{user_id}")
 def delete_user(
-    user_id: int
+    user_id: int,
 ):
 
     users = load_users()
 
-    user = next(
-        (
-            user
-            for user in users
-            if user["id"] == user_id
-        ),
-        None,
+    user_exists = any(
+        int(
+            user.get(
+                "id",
+                0,
+            )
+        ) == user_id
+        for user in users
     )
 
-    if user is None:
+    if not user_exists:
 
         raise HTTPException(
             status_code=404,
-            detail="User not found",
+            detail="User not found.",
         )
 
-    users.remove(
+    users = [
         user
-    )
-
-    save_users(
-        users
-    )
-
-    # --------------------------------------------------------
-    # Also delete this user's Todos.
-    # --------------------------------------------------------
-
-    todos = load_todos()
-
-    todos = [
-        todo
-        for todo in todos
-        if todo.get("user_id") != user_id
+        for user in users
+        if int(
+            user.get(
+                "id",
+                0,
+            )
+        ) != user_id
     ]
 
-    save_todos(
-        todos
-    )
+    save_users(users)
 
     return {
-        "message": "User deleted successfully",
-        "user": {
-            "id": user["id"],
-            "name": user["name"],
-            "email": user["email"],
-        },
+        "message":
+            "User deleted successfully."
     }
 
 
 # ============================================================
-# TODO CRUD
+# TODOS - GET ALL
 # ============================================================
 
-# ------------------------------------------------------------
-# GET TODOS
-# ------------------------------------------------------------
 
 @app.get("/todos")
-def get_todos(
-    current_user=Depends(
-        get_current_user
-    )
-):
+def get_todos():
 
-    todos = load_todos()
-
-    user_todos = [
-        todo
-        for todo in todos
-        if todo.get("user_id")
-        == current_user["id"]
-    ]
-
-    return user_todos
+    return load_todos()
 
 
-# ------------------------------------------------------------
-# CREATE TODO
-# ------------------------------------------------------------
-
-@app.post("/todos")
-def create_todo(
-    todo_data: TodoCreate,
-    current_user=Depends(
-        get_current_user
-    )
-):
-
-    todos = load_todos()
-
-    if todos:
-
-        new_id = max(
-            todo["id"]
-            for todo in todos
-        ) + 1
-
-    else:
-
-        new_id = 1
-
-    new_todo = {
-        "id": new_id,
-        "user_id": current_user["id"],
-        "title": todo_data.title,
-        "completed": todo_data.completed,
-    }
-
-    todos.append(
-        new_todo
-    )
-
-    save_todos(
-        todos
-    )
-
-    return new_todo
+# ============================================================
+# TODOS - GET ONE
+# ============================================================
 
 
-# ------------------------------------------------------------
-# UPDATE TODO
-# ------------------------------------------------------------
-
-@app.put("/todos/{todo_id}")
-def update_todo(
+@app.get("/todos/{todo_id}")
+def get_todo(
     todo_id: int,
-    todo_data: TodoUpdate,
-    current_user=Depends(
-        get_current_user
-    )
 ):
 
     todos = load_todos()
@@ -878,76 +816,578 @@ def update_todo(
         (
             todo
             for todo in todos
-            if todo["id"] == todo_id
-            and todo.get("user_id")
-            == current_user["id"]
+            if int(
+                todo.get(
+                    "id",
+                    0,
+                )
+            ) == todo_id
         ),
         None,
     )
 
-    if todo is None:
+    if not todo:
 
         raise HTTPException(
             status_code=404,
-            detail="Todo not found",
+            detail="Todo not found.",
         )
-
-    if todo_data.title is not None:
-
-        todo["title"] = todo_data.title
-
-    if todo_data.completed is not None:
-
-        todo["completed"] = todo_data.completed
-
-    save_todos(
-        todos
-    )
 
     return todo
 
 
-# ------------------------------------------------------------
-# DELETE TODO
-# ------------------------------------------------------------
+# ============================================================
+# TODOS - CREATE
+# ============================================================
 
-@app.delete("/todos/{todo_id}")
-def delete_todo(
-    todo_id: int,
-    current_user=Depends(
-        get_current_user
-    )
+
+@app.post("/todos")
+def create_todo(
+    request: TodoCreate,
 ):
 
     todos = load_todos()
 
-    todo = next(
+    title = request.title.strip()
+
+    if not title:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Todo title is required."
+            ),
+        )
+
+    new_todo = {
+        "id":
+            get_next_todo_id(todos),
+
+        "title":
+            title,
+
+        "description":
+            request.description or "",
+
+        "completed":
+            request.completed,
+
+        "created_at":
+            datetime.now().isoformat(),
+    }
+
+    todos.append(new_todo)
+
+    save_todos(todos)
+
+    return new_todo
+
+
+# ============================================================
+# TODOS - UPDATE
+# ============================================================
+
+
+@app.put("/todos/{todo_id}")
+def update_todo(
+    todo_id: int,
+    request: TodoUpdate,
+):
+
+    todos = load_todos()
+
+    todo_index = next(
         (
-            todo
-            for todo in todos
-            if todo["id"] == todo_id
-            and todo.get("user_id")
-            == current_user["id"]
+            index
+            for index, todo
+            in enumerate(todos)
+            if int(
+                todo.get(
+                    "id",
+                    0,
+                )
+            ) == todo_id
         ),
         None,
     )
 
-    if todo is None:
+    if todo_index is None:
 
         raise HTTPException(
             status_code=404,
-            detail="Todo not found",
+            detail="Todo not found.",
         )
 
-    todos.remove(
-        todo
+    todo = todos[todo_index]
+
+    if request.title is not None:
+
+        title = request.title.strip()
+
+        if not title:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Todo title "
+                    "cannot be empty."
+                ),
+            )
+
+        todo["title"] = title
+
+    if request.description is not None:
+
+        todo["description"] = (
+            request.description
+        )
+
+    if request.completed is not None:
+
+        todo["completed"] = (
+            request.completed
+        )
+
+    todo["updated_at"] = (
+        datetime.now().isoformat()
     )
 
-    save_todos(
-        todos
+    todos[todo_index] = todo
+
+    save_todos(todos)
+
+    return todo
+
+
+# ============================================================
+# TODOS - DELETE
+# ============================================================
+
+
+@app.delete("/todos/{todo_id}")
+def delete_todo(
+    todo_id: int,
+):
+
+    todos = load_todos()
+
+    exists = any(
+        int(
+            todo.get(
+                "id",
+                0,
+            )
+        ) == todo_id
+        for todo in todos
     )
+
+    if not exists:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Todo not found.",
+        )
+
+    todos = [
+        todo
+        for todo in todos
+        if int(
+            todo.get(
+                "id",
+                0,
+            )
+        ) != todo_id
+    ]
+
+    save_todos(todos)
 
     return {
-        "message": "Todo deleted successfully",
-        "todo": todo,
+        "message":
+            "Todo deleted successfully."
     }
+
+
+# ============================================================
+# TODOS - TOGGLE COMPLETE
+# ============================================================
+
+
+@app.patch("/todos/{todo_id}/toggle")
+def toggle_todo(
+    todo_id: int,
+):
+
+    todos = load_todos()
+
+    todo_index = next(
+        (
+            index
+            for index, todo
+            in enumerate(todos)
+            if int(
+                todo.get(
+                    "id",
+                    0,
+                )
+            ) == todo_id
+        ),
+        None,
+    )
+
+    if todo_index is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Todo not found.",
+        )
+
+    todo = todos[todo_index]
+
+    todo["completed"] = not todo.get(
+        "completed",
+        False,
+    )
+
+    todo["updated_at"] = (
+        datetime.now().isoformat()
+    )
+
+    todos[todo_index] = todo
+
+    save_todos(todos)
+
+    return todo
+
+
+# ============================================================
+# GEMINI GENERAL AI
+# ============================================================
+
+
+@app.post("/api/ai")
+def ask_gemini(
+    request: AIRequest,
+):
+
+    if gemini_client is None:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Gemini API key "
+                "is not configured."
+            ),
+        )
+
+    message = request.message.strip()
+
+    if not message:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Message cannot be empty."
+            ),
+        )
+
+    try:
+
+        interaction = (
+            gemini_client
+            .interactions
+            .create(
+                model=
+                    "gemini-3.8-flash",
+
+                input=message,
+            )
+        )
+
+        return {
+            "response":
+                interaction.output_text
+        }
+
+    except Exception as error:
+
+        print(
+            "Gemini error:",
+            str(error),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Gemini AI is temporarily "
+                "unavailable."
+            ),
+        )
+
+
+# ============================================================
+# GEMINI CONNECTION TEST
+# ============================================================
+
+
+@app.get("/api/ai/test")
+def test_gemini():
+
+    if gemini_client is None:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Gemini API key "
+                "is not configured."
+            ),
+        )
+
+    try:
+
+        interaction = (
+            gemini_client
+            .interactions
+            .create(
+                model=
+                    "gemini-3.8-flash",
+
+                input=(
+                    "Reply only with: "
+                    "Gemini is connected successfully."
+                ),
+            )
+        )
+
+        return {
+            "status":
+                "connected",
+
+            "response":
+                interaction.output_text,
+        }
+
+    except Exception as error:
+
+        print(
+            "Gemini test error:",
+            str(error),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        )
+
+
+# ============================================================
+# AI HEALTH SYMPTOM ASSISTANT
+# ============================================================
+
+
+@app.post(
+    "/api/health-assistant"
+)
+def health_assistant(
+    request: SymptomRequest,
+):
+
+    if gemini_client is None:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Gemini API is "
+                "not configured."
+            ),
+        )
+
+    symptoms = (
+        request.symptoms.strip()
+    )
+
+    if not symptoms:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Please enter symptoms."
+            ),
+        )
+
+    patient_age = (
+        str(request.age)
+        if request.age is not None
+        else "Not provided"
+    )
+
+    patient_sex = (
+        request.sex
+        if request.sex
+        else "Not provided"
+    )
+
+    duration = (
+        request.duration
+        if request.duration
+        else "Not provided"
+    )
+
+    severity = (
+        request.severity
+        if request.severity
+        else "Not provided"
+    )
+
+    medications = (
+        request.medications
+        if request.medications
+        else "Not provided"
+    )
+
+    prompt = f"""
+You are a cautious health symptom assessment assistant.
+
+You are NOT a replacement for a doctor or qualified healthcare professional.
+
+Do not state that you have confirmed a diagnosis.
+
+Use the patient's information only to provide general health guidance.
+
+PATIENT INFORMATION
+
+Age:
+{patient_age}
+
+Sex:
+{patient_sex}
+
+Symptoms:
+{symptoms}
+
+Duration:
+{duration}
+
+Severity:
+{severity}
+
+Current medications:
+{medications}
+
+
+Respond using exactly these sections:
+
+
+1. SYMPTOM SUMMARY
+
+Briefly summarize the symptoms described.
+
+
+2. POSSIBLE CAUSES
+
+List reasonable possible explanations.
+
+Clearly say these are possibilities and not a confirmed diagnosis.
+
+Do not exaggerate unlikely conditions.
+
+
+3. URGENCY
+
+Choose one of these:
+
+SELF CARE / MONITOR
+
+SEE A HEALTHCARE PROVIDER
+
+URGENT MEDICAL CARE
+
+EMERGENCY
+
+Explain briefly why.
+
+
+4. RECOMMENDED ACTION
+
+Give simple practical next steps.
+
+If appropriate, advise consultation with a healthcare professional.
+
+
+5. GENERAL SELF-CARE
+
+Provide only safe general self-care advice.
+
+Examples may include:
+
+- rest
+- hydration
+- monitoring symptoms
+- eating appropriately
+- avoiding strenuous activity when appropriate
+
+Do not prescribe prescription medication.
+
+Do not tell the patient to stop prescribed medication.
+
+Be cautious about recommending medicines because allergies,
+drug interactions, pregnancy, medical conditions and other
+factors may not be known.
+
+
+6. WARNING SIGNS
+
+List symptoms or changes that should prompt urgent
+or emergency medical attention.
+
+If symptoms indicate a possible emergency such as:
+
+- severe difficulty breathing
+- severe chest pain
+- loss of consciousness
+- stroke-like symptoms
+- severe bleeding
+- severe allergic reaction
+- severe confusion
+
+make the emergency recommendation prominent.
+
+
+7. IMPORTANT NOTE
+
+State clearly that this AI assessment cannot confirm a diagnosis
+and does not replace evaluation by a qualified healthcare
+professional.
+"""
+
+    try:
+
+        interaction = (
+            gemini_client
+            .interactions
+            .create(
+                model=
+                    "gemini-3.8-flash",
+
+                input=prompt,
+            )
+        )
+
+        return {
+            "response":
+                interaction.output_text
+        }
+
+    except Exception as error:
+
+        print(
+            "Health Assistant error:",
+            str(error),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "The AI Health Assistant "
+                "is temporarily unavailable."
+            ),
+        )

@@ -1,1 +1,30 @@
-[]
+[
+    {
+        "id": 1,
+        "title": "Program with AI",
+        "description": "",
+        "completed": false,
+        "created_at": "2026-09-30T23:14:10.861276"
+    },
+    {
+        "id": 2,
+        "title": "Create UI",
+        "description": "",
+        "completed": false,
+        "created_at": "2026-09-30T23:14:19.595917"
+    },
+    {
+        "id": 3,
+        "title": "STRUCTURE BACKEND FIRST",
+        "description": "",
+        "completed": false,
+        "created_at": "2026-09-30T23:14:36.082560"
+    },
+    {
+        "id": 4,
+        "title": "USE JSON AS DATABASE",
+        "description": "",
+        "completed": false,
+        "created_at": "2026-09-30T23:15:01.628499"
+    }
+]
