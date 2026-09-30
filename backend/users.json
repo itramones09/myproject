@@ -1,0 +1,14 @@
+[
+    {
+        "id": 1,
+        "name": "ian",
+        "email": "ian@example.com",
+        "password_hash": null
+    },
+    {
+        "id": 2,
+        "name": "ian",
+        "email": "titus@example.com",
+        "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$s4++bEj/PDOOLE5cp30m+A$BrouZ+BSytB5UKPvikKaVQFAgcDfuZDpi9xy+x3iwyU"
+    }
+]
