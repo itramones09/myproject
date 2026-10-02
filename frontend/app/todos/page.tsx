@@ -21,7 +21,7 @@ export default function TodoPage() {
   const [aiAnalysis, setAiAnalysis] = useState("");
   const [message, setMessage] = useState("");
 
-  const API = "http://localhost:8000";
+  const API = process.env.NEXT_PUBLIC_API_URL!;
 
   // =========================================================
   // LOAD TODOS

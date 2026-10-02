@@ -16,7 +16,7 @@ export default function Users() {
   useEffect(() => {
     async function loadUsers() {
       try {
-        const response = await fetch("http://localhost:8000/users");
+        const response = await fetch("${process.env.NEXT_PUBLIC_API_URL}/users");
 
         if (!response.ok) {
           throw new Error(`Server error: ${response.status}`);

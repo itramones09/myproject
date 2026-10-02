@@ -14,7 +14,7 @@ export default function HealthAssistantPage() {
   const [analysis, setAnalysis] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const API = "http://localhost:8000";
+  const API = process.env.NEXT_PUBLIC_API_URL!;
 
 
   async function analyzeSymptoms(
